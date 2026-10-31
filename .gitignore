@@ -1,0 +1,12 @@
+# Ambiente virtual
+venv/
+
+# Chave de API e configurações locais
+.env
+
+# Cache do Python
+__pycache__/
+*.pyc
+
+# VS Code
+.vscode/
