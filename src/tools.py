@@ -13,6 +13,12 @@ def _normalizar(texto) -> str:
     texto = texto.encode("ascii", "ignore").decode("ascii")
     return texto.lower().strip()
 
+def _formatar_reais(valor: float) -> str:
+    """1299.9 -> 'R$ 1.299,90'"""
+    texto = f"{valor:,.2f}"  # '1,299.90' (padrão americano)
+    texto = texto.replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"R$ {texto}"
+
 
 def _produtos_com_preco_final() -> pd.DataFrame:
     """Tabela de produtos com as colunas da promoção ativa e do preço final."""
@@ -61,10 +67,10 @@ def buscar_produtos(
         {
             "nome": linha["name"],
             "categoria": linha["category_name"],
-            "preco_original": linha["price_brl"],
+            "preco_original": _formatar_reais(linha["price_brl"]),
             "desconto_percent": int(linha["discount_percent"]),
             "promocao": linha["promocao"] if pd.notna(linha["promocao"]) else None,
-            "preco_final": linha["preco_final"],
+            "preco_final": _formatar_reais(linha["preco_final"]),
             "estoque": int(linha["stock_quantity"]),
             "status": linha["status"],
             "especificacoes": linha["specs"],
