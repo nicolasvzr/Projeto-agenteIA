@@ -41,7 +41,8 @@ def buscar_produtos(
     preco_min: float | None = None,
     preco_max: float | None = None,
     apenas_disponiveis: bool = True,
-) -> list[dict]:
+    eletrico: bool | None = None,
+) -> dict:
     """Busca produtos no catálogo por nome/descrição, categoria e faixa de preço."""
     df = _produtos_com_preco_final()
 
@@ -50,6 +51,14 @@ def buscar_produtos(
 
     if categoria:
         df = df[df["category_name"].apply(_normalizar) == _normalizar(categoria)]
+
+    if cordas:
+        valor = {"nylon": "nylon", "aco": "steel"}.get(_normalizar(cordas))
+        df = df[df["specs"].apply(lambda s: s.get("strings")) == valor]
+
+    if eletrico is not None:
+        esperado = "yes" if eletrico else "no"
+        df = df[df["specs"].apply(lambda s: s.get("electronics")) == esperado]
 
     if termo:
         texto = (df["name"] + " " + df["description"]).apply(_normalizar)
@@ -61,9 +70,10 @@ def buscar_produtos(
     if preco_max is not None:
         df = df[df["preco_final"] <= preco_max]
 
+    total = len(df)
     df = df.sort_values("preco_final").head(LIMITE_RESULTADOS)
 
-    return [
+    produtos = [
         {
             "nome": linha["name"],
             "categoria": linha["category_name"],
@@ -79,10 +89,13 @@ def buscar_produtos(
         for _, linha in df.iterrows()
     ]
 
+    return {"total_encontrado": total, "exibindo": len(produtos), "produtos": produtos}
+
 
 if __name__ == "__main__":
-    print("--- Violões até R$1000 ---")
-    for p in buscar_produtos(categoria="Violões", preco_max=1000):
+    r = buscar_produtos(categoria="Violões", cordas="aço", preco_max=1000)
+    print(f"Total: {r['total_encontrado']} | Exibindo: {r['exibindo']}")
+    for p in r["produtos"]:
         print(p["nome"], "|", p["preco_final"])
 
     print("\n--- Takamine GD20 ---")
