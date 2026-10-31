@@ -1,16 +1,21 @@
-from google import genai
-from google.genai import types
+from src.agent import Agente
 
-from src.config import GEMINI_API_KEY, GEMINI_MODEL
 
-client = genai.Client(api_key=GEMINI_API_KEY)
+def main():
+    agente = Agente()
+    print("🎸 Empório da Música — atendimento virtual (digite 'sair' para encerrar)\n")
 
-resposta = client.models.generate_content(
-    model=GEMINI_MODEL,
-    contents="Oi! Vocês vendem violão?",
-    config=types.GenerateContentConfig(
-        system_instruction="Você é um atendente simpático de uma loja de instrumentos musicais.",
-    ),
-)
+    while True:
+        mensagem = input("Você: ").strip()
+        if not mensagem:
+            continue
+        if mensagem.lower() in {"sair", "exit", "quit"}:
+            print("Até mais! 🎶")
+            break
 
-print(resposta.text)
+        resposta = agente.responder(mensagem)
+        print(f"\nAtendente: {resposta}\n")
+
+
+if __name__ == "__main__":
+    main()
