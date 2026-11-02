@@ -1,9 +1,9 @@
 from google import genai
 from google.genai import types
 from google.genai import errors
-from src.config import GEMINI_API_KEY, GEMINI_MODEL
+from src.config import GEMINI_API_KEY, GEMINI_MODELS
 from src.data_loader import carregar_dados
-from src.prompts import SYSTEM_PROMPT
+from src.prompts import montar_prompt
 from src.tools import buscar_produtos
 import time
 from src.spinner import Spinner
@@ -88,26 +88,36 @@ class Agente:
         self.client = genai.Client(api_key=GEMINI_API_KEY)
         self.historico: list[types.Content] = []
         self.config = types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
+            system_instruction=montar_prompt(),
             tools=[types.Tool(function_declarations=[_declaracao_buscar_produtos()])],
         )
     def _gerar(self):
-        """Chama o Gemini e tenta de novo, esperando um pouco, se o servidor estiver ocupado."""
-        for tentativa in range(1, TENTATIVAS + 1):
-            try:
-                with Spinner("Pensando"):
-                    return self.client.models.generate_content(
-                        model=GEMINI_MODEL,
-                        contents=self.historico,
-                        config=self.config,
-                    )
-            except (errors.ServerError, errors.ClientError) as erro:
-                pode_repetir = isinstance(erro, errors.ServerError) or erro.code == 429
-                if not pode_repetir or tentativa == TENTATIVAS:
-                    raise
-                espera = 2 ** tentativa
-                print(f"  [aviso] modelo indisponível ({erro.code}), tentando de novo em {espera}s...")
-                time.sleep(espera)
+        """Tenta cada modelo da lista. Servidor ocupado (5xx): tenta de novo. Cota esgotada (429): pula de modelo."""
+        ultimo_erro = None
+        for modelo in GEMINI_MODELS:
+            for tentativa in range(1, TENTATIVAS + 1):
+                try:
+                    with Spinner("Pensando"):
+                        return self.client.models.generate_content(
+                            model=modelo,
+                            contents=self.historico,
+                            config=self.config,
+                        )
+                except errors.ClientError as erro:
+                    if erro.code != 429:
+                        raise  # erro no pedido (ex.: chave inválida): trocar de modelo não resolve
+                    ultimo_erro = erro
+                    print(f"  [aviso] cota do {modelo} esgotada, trocando de modelo...")
+                    break  # sai das tentativas e vai para o próximo modelo
+                except errors.ServerError as erro:
+                    ultimo_erro = erro
+                    if tentativa < TENTATIVAS:
+                        espera = 2 ** tentativa
+                        print(f"  [aviso] {modelo} ocupado ({erro.code}), tentando de novo em {espera}s...")
+                        time.sleep(espera)
+                    else:
+                        print(f"  [aviso] {modelo} não respondeu, trocando de modelo...")
+        raise ultimo_erro
 
     def responder(self, mensagem: str) -> str:
         # Guarda o tamanho do histórico para desfazer, caso dê erro
