@@ -13,9 +13,10 @@ def _normalizar(texto) -> str:
     texto = texto.encode("ascii", "ignore").decode("ascii")
     return texto.lower().strip()
 
+
 def _formatar_reais(valor: float) -> str:
     """1299.9 -> 'R$ 1.299,90'"""
-    texto = f"{valor:,.2f}"  # '1,299.90' (padrão americano)
+    texto = f"{valor:,.2f}"
     texto = texto.replace(",", "X").replace(".", ",").replace("X", ".")
     return f"R$ {texto}"
 
@@ -35,16 +36,27 @@ def _produtos_com_preco_final() -> pd.DataFrame:
     return df
 
 
+def _promocoes_encerradas() -> dict:
+    """{product_id: ['Nome da promoção', ...]} das promoções que já acabaram."""
+    promocoes = carregar_dados()["promocoes"]
+    return (
+        promocoes[promocoes["is_active"] == 0]
+        .groupby("product_id")["description"]
+        .apply(lambda nomes: sorted(set(nomes)))
+        .to_dict()
+    )
+
+
 def buscar_produtos(
     termo: str | None = None,
     categoria: str | None = None,
     preco_min: float | None = None,
     preco_max: float | None = None,
     cordas: str | None = None,
-    apenas_disponiveis: bool = True,
     eletrico: bool | None = None,
+    apenas_disponiveis: bool = True,
 ) -> dict:
-    """Busca produtos no catálogo por nome/descrição, categoria e faixa de preço."""
+    """Busca produtos no catálogo por nome/descrição, categoria, faixa de preço, tipo de corda e captação."""
     df = _produtos_com_preco_final()
 
     if apenas_disponiveis:
@@ -73,6 +85,7 @@ def buscar_produtos(
 
     total = len(df)
     df = df.sort_values("preco_final").head(LIMITE_RESULTADOS)
+    encerradas = _promocoes_encerradas()
 
     produtos = [
         {
@@ -82,6 +95,7 @@ def buscar_produtos(
             "desconto_percent": int(linha["discount_percent"]),
             "promocao": linha["promocao"] if pd.notna(linha["promocao"]) else None,
             "preco_final": _formatar_reais(linha["preco_final"]),
+            "promocoes_encerradas": encerradas.get(linha["product_id"], []),
             "estoque": int(linha["stock_quantity"]),
             "status": linha["status"],
             "especificacoes": linha["specs"],
@@ -99,8 +113,6 @@ if __name__ == "__main__":
     for p in r["produtos"]:
         print(p["nome"], "|", p["preco_final"])
 
-    print("\n--- Takamine GD20 ---")
-    print(buscar_produtos(termo="takamine gd20"))
-
-    print("\n--- Produto em promoção (Ohana CK-20) ---")
-    print(buscar_produtos(termo="ohana ck-20"))
+    print("\n--- Martin D-28 (promoção encerrada) ---")
+    for p in buscar_produtos(termo="martin d-28", apenas_disponiveis=False)["produtos"]:
+        print(p["nome"], "|", p["preco_final"], "| encerradas:", p["promocoes_encerradas"])
