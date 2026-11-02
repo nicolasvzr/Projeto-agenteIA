@@ -1,13 +1,17 @@
 from google import genai
 from google.genai import types
-
+from google.genai import errors
 from src.config import GEMINI_API_KEY, GEMINI_MODEL
 from src.data_loader import carregar_dados
 from src.prompts import SYSTEM_PROMPT
 from src.tools import buscar_produtos
+import time
+from src.spinner import Spinner
 
 # Máximo de idas e vindas com ferramentas por mensagem (evita loop infinito)
 MAX_PASSOS = 5
+# Quantas vezes tentar de novo quando o Google estiver indisponível ou com limite de uso
+TENTATIVAS = 3
 
 # Liga o NOME que o Gemini usa à FUNÇÃO Python que será executada
 FUNCOES = {
@@ -75,6 +79,7 @@ def _executar_ferramenta(chamada: types.FunctionCall) -> dict:
     try:
         return {"resultado": funcao(**(chamada.args or {}))}
     except Exception as erro:
+        print(f"  [erro na ferramenta] {type(erro).__name__}: {erro}")
         return {"erro": str(erro)}
 
 
@@ -86,32 +91,48 @@ class Agente:
             system_instruction=SYSTEM_PROMPT,
             tools=[types.Tool(function_declarations=[_declaracao_buscar_produtos()])],
         )
+    def _gerar(self):
+        """Chama o Gemini e tenta de novo, esperando um pouco, se o servidor estiver ocupado."""
+        for tentativa in range(1, TENTATIVAS + 1):
+            try:
+                with Spinner("Pensando"):
+                    return self.client.models.generate_content(
+                        model=GEMINI_MODEL,
+                        contents=self.historico,
+                        config=self.config,
+                    )
+            except (errors.ServerError, errors.ClientError) as erro:
+                pode_repetir = isinstance(erro, errors.ServerError) or erro.code == 429
+                if not pode_repetir or tentativa == TENTATIVAS:
+                    raise
+                espera = 2 ** tentativa
+                print(f"  [aviso] modelo indisponível ({erro.code}), tentando de novo em {espera}s...")
+                time.sleep(espera)
 
     def responder(self, mensagem: str) -> str:
-        # 1. Mensagem do cliente entra no histórico
+        # Guarda o tamanho do histórico para desfazer, caso dê erro
+        tamanho_antes = len(self.historico)
         self.historico.append(types.Content(role="user", parts=[types.Part.from_text(text=mensagem)]))
 
-        for _ in range(MAX_PASSOS):
-            # 2. Manda o histórico inteiro + as ferramentas para o Gemini
-            resposta = self.client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=self.historico,
-                config=self.config,
-            )
+        try:
+            for _ in range(MAX_PASSOS):
+                resposta = self._gerar()
+                self.historico.append(resposta.candidates[0].content)
 
-            # 3. Guarda a resposta do modelo (completa, não só o texto)
-            self.historico.append(resposta.candidates[0].content)
+                if not resposta.function_calls:
+                    return resposta.text or "Desculpe, não consegui responder agora."
 
-            # 4. Se não pediu ferramenta, é a resposta final
-            if not resposta.function_calls:
-                return resposta.text or "Desculpe, não consegui responder agora."
+                partes = []
+                for chamada in resposta.function_calls:
+                    print(f"  [ferramenta] {chamada.name}({dict(chamada.args or {})})")
+                    resultado = _executar_ferramenta(chamada)
+                    partes.append(types.Part.from_function_response(name=chamada.name, response=resultado))
+                self.historico.append(types.Content(role="user", parts=partes))
 
-            # 5. Executa cada ferramenta pedida e devolve os resultados ao modelo
-            partes = []
-            for chamada in resposta.function_calls:
-                print(f"  [ferramenta] {chamada.name}({dict(chamada.args or {})})")
-                resultado = _executar_ferramenta(chamada)
-                partes.append(types.Part.from_function_response(name=chamada.name, response=resultado))
-            self.historico.append(types.Content(role="user", parts=partes))
+            return "Desculpe, tive um problema para concluir sua solicitação. Pode tentar de novo?"
 
-        return "Desculpe, tive um problema para concluir sua solicitação. Pode tentar de novo?"
+        except errors.APIError as erro:
+            # Desfaz a mensagem que falhou, para o histórico não ficar quebrado
+            del self.historico[tamanho_antes:]
+            print(f"  [erro] {erro.code}: {erro.message}")
+            return "Ops, estou com uma instabilidade aqui. Pode mandar sua mensagem de novo em instantes? 🙏"
