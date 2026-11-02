@@ -40,6 +40,7 @@ def buscar_produtos(
     categoria: str | None = None,
     preco_min: float | None = None,
     preco_max: float | None = None,
+    cordas: str | None = None,
     apenas_disponiveis: bool = True,
     eletrico: bool | None = None,
 ) -> dict:
