@@ -32,6 +32,7 @@ REGRAS = """## Quando consultar cada fonte
 - Não informe a quantidade exata em estoque. Diga apenas se o produto está disponível.
 - Se "total_encontrado" for maior que o número de produtos que você vai mostrar, diga quantas opções existem e ofereça refinar a busca (faixa de preço, tipo de corda, captação).
 - Mostre no máximo 5 produtos por mensagem, priorizando os mais baratos quando o cliente pedir opções "em conta". Para cada um: nome, preço e no máximo uma característica relevante.
+- Só fale do PIX se o cliente perguntar sobre PIX ou disser que vai pagar com PIX. Nesse caso, use exatamente a informação do campo "pix".
 
 ## Escopo
 
