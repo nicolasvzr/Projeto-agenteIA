@@ -176,12 +176,6 @@ def consultar_pedido(numero_pedido: int, nome: str, email: str) -> dict:
         "data_de_hoje": hoje.strftime("%d/%m/%Y"),
     }
 
-print("\n--- Pedidos ---")
-print(consultar_pedido(5, "Rafael Pereira", "rafael.pereira@jmail.com"))   # certo
-print(consultar_pedido(5, "Rafael Pereira", "outro@email.com"))            # e-mail errado
-print(consultar_pedido(19, "pedro henrique oliveira", "PEDRO.OLIVEIRA@jmail.com"))  # maiúsculas
-print(consultar_pedido(8, "Ana Carolina Ferreira", "anacarol.ferreira@coldmail.com"))  # enviado e atrasado
-
 
 if __name__ == "__main__":
     r = buscar_produtos(categoria="Violões", cordas="aço", preco_max=1000)
@@ -192,3 +186,9 @@ if __name__ == "__main__":
     print("\n--- Martin D-28 (promoção encerrada) ---")
     for p in buscar_produtos(termo="martin d-28", apenas_disponiveis=False)["produtos"]:
         print(p["nome"], "|", p["preco_final"], "| encerradas:", p["promocoes_encerradas"])
+
+    print("\n--- Pedidos ---")
+    print(consultar_pedido(5, "Rafael Pereira", "rafael.pereira@jmail.com"))   # certo
+    print(consultar_pedido(5, "Rafael Pereira", "outro@email.com"))            # e-mail errado
+    print(consultar_pedido(19, "pedro henrique oliveira", "PEDRO.OLIVEIRA@jmail.com"))  # maiúsculas
+    print(consultar_pedido(8, "Ana Carolina Ferreira", "anacarol.ferreira@coldmail.com"))  # enviado e atrasado
