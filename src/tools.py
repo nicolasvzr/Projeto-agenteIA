@@ -4,6 +4,8 @@ import pandas as pd
 
 from src.data_loader import carregar_dados
 
+from datetime import date
+
 LIMITE_RESULTADOS = 10
 
 
@@ -105,6 +107,80 @@ def buscar_produtos(
     ]
 
     return {"total_encontrado": total, "exibindo": len(produtos), "produtos": produtos}
+
+STATUS_PEDIDO = {
+    "pending": "Aguardando confirmação do pagamento",
+    "confirmed": "Pagamento confirmado, em preparação para envio",
+    "shipped": "Enviado",
+    "delivered": "Entregue",
+    "cancelled": "Cancelado",
+}
+
+
+def _forma_pagamento(codigo: str) -> str:
+    """'credit_12x' -> 'Cartão de crédito em 12x'"""
+    nomes = {"pix": "PIX", "debit": "Cartão de débito", "boleto": "Boleto bancário"}
+    if codigo in nomes:
+        return nomes[codigo]
+    if codigo.startswith("credit_"):
+        return f"Cartão de crédito em {codigo.removeprefix('credit_')}"
+    return codigo
+
+
+def _data(valor) -> str | None:
+    """Data do pandas -> '05/01/2026' (ou None se estiver vazia)."""
+    return valor.strftime("%d/%m/%Y") if pd.notna(valor) else None
+
+
+def consultar_pedido(numero_pedido: int, nome: str, email: str) -> dict:
+    """Consulta um pedido. Só devolve os dados se o nome e o e-mail baterem com o cadastro do cliente."""
+    dados = carregar_dados()
+    pedidos, clientes = dados["pedidos"], dados["clientes"]
+    nao_encontrado = {"encontrado": False, "mensagem": "Nenhum pedido encontrado com esses dados."}
+
+    pedido = pedidos[pedidos["order_id"] == int(numero_pedido)]
+    if pedido.empty:
+        return nao_encontrado
+    pedido = pedido.iloc[0]
+
+    cliente = clientes[clientes["customer_id"] == pedido["customer_id"]].iloc[0]
+
+    # E-mail: precisa ser igual (sem diferenciar maiúsculas). Nome: todas as palavras informadas
+    # precisam estar no nome do cadastro (aceita "Rafael Pereira" para "Rafael Augusto Pereira").
+    email_ok = _normalizar(email) == _normalizar(cliente["email"])
+    palavras_nome = _normalizar(nome).split()
+    nome_ok = bool(palavras_nome) and all(p in _normalizar(cliente["name"]).split() for p in palavras_nome)
+    if not (email_ok and nome_ok):
+        return nao_encontrado  # mesma resposta para qualquer erro: não revela qual dado está errado
+
+    itens = dados["itens"].merge(dados["produtos"][["product_id", "name"]], on="product_id")
+    itens = itens[itens["order_id"] == pedido["order_id"]]
+
+    hoje = date.today()
+    entrega = pedido["estimated_delivery"]
+    return {
+        "encontrado": True,
+        "numero_pedido": int(pedido["order_id"]),
+        "primeiro_nome_cliente": cliente["name"].split()[0],
+        "status": STATUS_PEDIDO.get(pedido["status"], pedido["status"]),
+        "data_pedido": _data(pedido["order_date"]),
+        "dias_desde_o_pedido": (hoje - pedido["order_date"].date()).days,
+        "previsao_entrega": _data(entrega),
+        "dias_desde_a_entrega_prevista": (hoje - entrega.date()).days if pd.notna(entrega) else None,
+        "entrega_atrasada": bool(pedido["status"] == "shipped" and pd.notna(entrega) and entrega.date() < hoje),
+        "valor_total": _formatar_reais(pedido["total_brl"]),
+        "forma_pagamento": _forma_pagamento(pedido["payment_method"]),
+        "codigo_rastreio": pedido["tracking_code"] if pd.notna(pedido["tracking_code"]) else None,
+        "observacao": pedido["notes"] if pd.notna(pedido["notes"]) else None,
+        "itens": [{"produto": i["name"], "quantidade": int(i["quantity"])} for _, i in itens.iterrows()],
+        "data_de_hoje": hoje.strftime("%d/%m/%Y"),
+    }
+
+print("\n--- Pedidos ---")
+print(consultar_pedido(5, "Rafael Pereira", "rafael.pereira@jmail.com"))   # certo
+print(consultar_pedido(5, "Rafael Pereira", "outro@email.com"))            # e-mail errado
+print(consultar_pedido(19, "pedro henrique oliveira", "PEDRO.OLIVEIRA@jmail.com"))  # maiúsculas
+print(consultar_pedido(8, "Ana Carolina Ferreira", "anacarol.ferreira@coldmail.com"))  # enviado e atrasado
 
 
 if __name__ == "__main__":
