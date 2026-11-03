@@ -1,29 +1,32 @@
+import time
+
 from google import genai
-from google.genai import types
-from google.genai import errors
+from google.genai import errors, types
+
 from src.config import GEMINI_API_KEY, GEMINI_MODELS
 from src.data_loader import carregar_dados
 from src.prompts import montar_prompt
-from src.tools import buscar_produtos
-import time
 from src.spinner import Spinner
 from src.tools import buscar_produtos, consultar_pedido
 
 # Máximo de idas e vindas com ferramentas por mensagem (evita loop infinito)
 MAX_PASSOS = 5
-# Quantas vezes tentar de novo quando o Google estiver indisponível ou com limite de uso
+
+# Quantas vezes tentar de novo quando o servidor do Google estiver ocupado
 TENTATIVAS = 3
+
+# Tempo máximo de espera por resposta do Gemini, em milissegundos
+TIMEOUT_MS = 30_000
 
 # Liga o NOME que o Gemini usa à FUNÇÃO Python que será executada
 FUNCOES = {
-    "buscar_produtos": buscar_produtos,
     "buscar_produtos": buscar_produtos,
     "consultar_pedido": consultar_pedido,
 }
 
 
 def _declaracao_buscar_produtos() -> types.FunctionDeclaration:
-    """Descreve a ferramenta para o Gemini: o que faz e quais parâmetros aceita."""
+    """Descreve a ferramenta de produtos para o Gemini: o que faz e quais parâmetros aceita."""
     categorias = carregar_dados()["categorias"]["name"].tolist()
 
     return types.FunctionDeclaration(
@@ -53,13 +56,6 @@ def _declaracao_buscar_produtos() -> types.FunctionDeclaration:
                     type=types.Type.NUMBER,
                     description="Preço máximo em reais.",
                 ),
-                "apenas_disponiveis": types.Schema(
-                    type=types.Type.BOOLEAN,
-                    description=(
-                        "True (padrão): só itens à venda e com estoque. Use False para verificar "
-                        "se um produto específico existe, mas está esgotado ou descontinuado."
-                    ),
-                ),
                 "cordas": types.Schema(
                     type=types.Type.STRING,
                     enum=["nylon", "aço"],
@@ -67,13 +63,25 @@ def _declaracao_buscar_produtos() -> types.FunctionDeclaration:
                 ),
                 "eletrico": types.Schema(
                     type=types.Type.BOOLEAN,
-                    description="True para eletroacústicos (com captação para ligar em amplificador); False para só acústicos.",
+                    description=(
+                        "True para eletroacústicos (com captação para ligar em amplificador); "
+                        "False para só acústicos."
+                    ),
+                ),
+                "apenas_disponiveis": types.Schema(
+                    type=types.Type.BOOLEAN,
+                    description=(
+                        "True (padrão): só itens à venda e com estoque. Use False para verificar "
+                        "se um produto específico existe, mas está esgotado ou descontinuado."
+                    ),
                 ),
             },
         ),
     )
 
+
 def _declaracao_consultar_pedido() -> types.FunctionDeclaration:
+    """Descreve a ferramenta de pedidos para o Gemini."""
     return types.FunctionDeclaration(
         name="consultar_pedido",
         description=(
@@ -93,17 +101,6 @@ def _declaracao_consultar_pedido() -> types.FunctionDeclaration:
     )
 
 
-def _executar_ferramenta(chamada: types.FunctionCall) -> dict:
-    """Executa a função pedida pelo Gemini e devolve o resultado (ou o erro)."""
-    funcao = FUNCOES.get(chamada.name)
-    if funcao is None:
-        return {"erro": f"Ferramenta '{chamada.name}' não existe."}
-    try:
-        return {"resultado": funcao(**(chamada.args or {}))}
-    except Exception as erro:
-        print(f"  [erro na ferramenta] {type(erro).__name__}: {erro}")
-        return {"erro": str(erro)}
-
 def _args_para_log(args: dict) -> dict:
     """Esconde dados pessoais antes de imprimir no terminal."""
     seguro = dict(args)
@@ -115,14 +112,33 @@ def _args_para_log(args: dict) -> dict:
     return seguro
 
 
+def _executar_ferramenta(chamada: types.FunctionCall) -> dict:
+    """Executa a função pedida pelo Gemini e devolve o resultado (ou o erro)."""
+    funcao = FUNCOES.get(chamada.name)
+    if funcao is None:
+        return {"erro": f"Ferramenta '{chamada.name}' não existe."}
+    try:
+        return {"resultado": funcao(**(chamada.args or {}))}
+    except Exception as erro:
+        print(f"  [erro na ferramenta] {type(erro).__name__}: {erro}")
+        return {"erro": str(erro)}
+
+
 class Agente:
     def __init__(self):
-        self.client = genai.Client(api_key=GEMINI_API_KEY)
+        self.client = genai.Client(
+            api_key=GEMINI_API_KEY,
+            http_options=types.HttpOptions(timeout=TIMEOUT_MS),
+        )
         self.historico: list[types.Content] = []
         self.config = types.GenerateContentConfig(
             system_instruction=montar_prompt(),
-            tools=[types.Tool(function_declarations=[_declaracao_buscar_produtos(), _declaracao_consultar_pedido()])],
+            tools=[types.Tool(function_declarations=[
+                _declaracao_buscar_produtos(),
+                _declaracao_consultar_pedido(),
+            ])],
         )
+
     def _gerar(self):
         """Tenta cada modelo da lista. Servidor ocupado (5xx): tenta de novo. Cota esgotada (429): pula de modelo."""
         ultimo_erro = None
@@ -144,7 +160,7 @@ class Agente:
                 except errors.ServerError as erro:
                     ultimo_erro = erro
                     if tentativa < TENTATIVAS:
-                        espera = 2 ** tentativa
+                        espera = 2 ** tentativa  # 2s, 4s...
                         print(f"  [aviso] {modelo} ocupado ({erro.code}), tentando de novo em {espera}s...")
                         time.sleep(espera)
                     else:
@@ -152,6 +168,7 @@ class Agente:
         raise ultimo_erro
 
     def responder(self, mensagem: str) -> str:
+        """Recebe a mensagem do cliente, roda o loop de function calling e devolve a resposta em texto."""
         # Guarda o tamanho do histórico para desfazer, caso dê erro
         tamanho_antes = len(self.historico)
         self.historico.append(types.Content(role="user", parts=[types.Part.from_text(text=mensagem)]))
