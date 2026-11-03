@@ -30,8 +30,8 @@ O agente:
 
 ```bash
 # 1. Clonar o repositório
-git clone https://github.com/SEU_USUARIO/NOME_DO_REPO.git
-cd NOME_DO_REPO
+git clone https://github.com/nicolasvzr/Projeto-agenteIA.git
+cd Projeto-agenteIA
 
 # 2. Criar e ativar o ambiente virtual
 python -m venv venv
@@ -124,7 +124,9 @@ O loop de function calling:
 
 ```
 ├── data/                      # CSVs e PDF fornecidos (não alterados)
-├── docs/politicas.md          # manual de políticas extraído do PDF
+├── docs/
+│   ├── politicas.md           # manual de políticas extraído do PDF
+│   └── decisoes-e-suposicoes.md  # inconsistências dos dados e decisões tomadas
 ├── scripts/
 │   └── extrair_politicas.py   # extração do PDF para Markdown (roda uma vez)
 ├── src/
@@ -157,11 +159,12 @@ O modelo não escreve consultas livres: ele só chama funções com parâmetros 
 
 O loop de function calling foi escrito à mão, com o SDK oficial do Google (`google-genai`). São poucas linhas, cada passo é visível e o projeto fica com menos dependências. Para um agente deste tamanho, um framework acrescentaria abstrações sem ganho real. Em um sistema maior (vários agentes, memória persistente, observabilidade), eu avaliaria o LangGraph.
 
-### Modelo e provedor: Gemini
+### Modelo, provedor e falhas
 
-- **Por que o Gemini:** tem cota gratuita (o avaliador roda o projeto sem custo), suporta function calling e tem um SDK oficial simples.
-- **Modelos `flash`:** rápidos e baratos, suficientes para atendimento. Modelos "pro" são mais lentos e têm cota gratuita bem menor; versões `preview` e aliases `-latest` foram evitados para que o comportamento seja reproduzível.
-- **Modelo configurável pelo `.env`:** trocar de modelo não exige mudar o código.
+Usei o **Gemini** (modelos `flash`) pelo SDK oficial: tem cota gratuita (o avaliador roda sem custo), suporta function calling e é rápido. Os modelos ficam no `.env`, numa lista em ordem de preferência. Como a cota gratuita oscila entre sobrecarga e limite diário, o agente:
+- tem timeout de 30 segundos por chamada e tenta de novo, com espera crescente, quando o servidor está ocupado (503);
+- troca para o próximo modelo da lista quando a cota acaba (429);
+- se tudo falhar, responde com uma mensagem amigável e mantém o chat aberto.
 
 ### Contas no código, não no modelo
 
@@ -196,70 +199,43 @@ As regras foram escritas a partir das falhas encontradas nos testes. O aprendiza
 
 O prompt também tem uma seção de **esclarecimentos** que resolve as contradições do manual (ver [suposições](#tratamento-dos-dados-e-suposições)).
 
-### Resiliência a falhas do provedor
+### Privacidade, histórico e interface
 
-Na cota gratuita, o Gemini às vezes responde "sobrecarregado" (503) ou "cota esgotada" (429). O agente:
-- tem timeout de 30 segundos por chamada;
-- em caso de 503, tenta de novo com espera crescente (2s, 4s);
-- em caso de 429, troca imediatamente para o próximo modelo da lista (esperar não resolve um limite diário);
-- se tudo falhar, responde ao cliente com uma mensagem amigável, desfaz a rodada no histórico e mantém o chat aberto.
-
-### Privacidade
-
-- Proteção em duas camadas para dados de clientes: o prompt proíbe informar dados de terceiros e a ferramenta nem devolve esses dados.
-- O log do terminal mascara nome e e-mail (`Rafael ***`, `ra***@jmail.com`).
-- Erros de ferramenta aparecem no log (`[erro na ferramenta]`), para que uma falha não pareça um problema do modelo.
-
-### Histórico da conversa
-
-O histórico fica em memória durante a sessão e é reenviado ao modelo a cada mensagem, o que permite perguntas de continuação ("e o mais barato desses?"). Não há persistência entre sessões: para um protótipo de terminal, isso não traria ganho para o cliente, e guardar conversas com nome e e-mail exigiria cuidados adicionais de LGPD.
-
-### Interface
-
-Chat no terminal (`main.py`). Ao iniciar, mostra uma saudação fixa, sem chamar o modelo; enquanto o modelo responde, aparece um indicador "Pensando...". As linhas `[ferramenta]` e `[aviso]` são logs de depuração que mostram quando o agente consultou os dados ou trocou de modelo; numa interface para o cliente, elas não apareceriam. O foco do desafio é o agente; a lógica está separada da interface, então uma API ou interface web reaproveitaria o `src/agent.py` sem mudanças.
+- **Dados de clientes protegidos em duas camadas:** o prompt proíbe informar dados de terceiros, e a ferramenta nem devolve e-mail, telefone ou endereço. O log do terminal mascara nome e e-mail (`Rafael ***`, `ra***@jmail.com`).
+- **Histórico em memória durante a sessão**, reenviado ao modelo a cada mensagem (permite "e o mais barato desses?"). Não há persistência entre sessões: num protótipo de terminal não traria ganho, e guardar conversas com dados pessoais exigiria cuidados de LGPD.
+- **Chat no terminal** (`main.py`), com saudação fixa e indicador "Pensando...". As linhas `[ferramenta]` e `[aviso]` são logs de depuração. A lógica do agente fica separada da interface, então uma API ou interface web reaproveitaria o `src/agent.py`.
 
 ## Tratamento dos dados e suposições
 
-### Tratamento feito
+Os arquivos em `data/` não são alterados; o tratamento é feito em memória: o JSON de `specs` vira dicionário (para filtrar por tipo de corda e captação), as datas são convertidas, a busca ignora acentos e maiúsculas, e status e formas de pagamento são traduzidos.
 
-- `specs`: o texto JSON de cada produto vira um dicionário, permitindo filtrar por tipo de corda (`strings`) e captação (`electronics`).
-- Datas convertidas para o tipo data.
-- Nome da categoria incluído na tabela de produtos.
-- Busca sem diferenciar acentos e maiúsculas ("violao" encontra "Violão").
-- Por padrão, a busca mostra só produtos à venda e com estoque; para um produto específico, o agente busca também os esgotados, descontinuados e "em breve", para explicar a situação.
-- Promoções: só as ativas (`is_active = 1`) entram no preço; as encerradas são informadas para o agente avisar com transparência, como o manual pede.
-- Status de pedido e forma de pagamento traduzidos (`credit_12x` vira "Cartão de crédito em 12x").
-- Os arquivos em `data/` não são alterados; todo o tratamento é feito em memória.
+Os dados e o manual têm contradições e lacunas. As principais suposições, que mudam o comportamento do agente:
+- **Contato:** o manual tem dois WhatsApps; o agente informa o (67) 3341-4444, que aparece nos dados oficiais da empresa.
+- **Parcelamento:** valem as faixas da seção 3.1 do manual (parcela mínima de R$ 50, R$ 80 e R$ 100), e não o mínimo único da tabela.
+- **Datas:** o agente usa a data de hoje, e os pedidos vão até março de 2026; por isso todos os prazos de devolução e troca aparecem como vencidos, e pedidos enviados com previsão vencida são sinalizados como atrasados. Como não há data real de recebimento, a previsão de entrega é usada no lugar.
+- **Catálogo:** o manual cita sopros e cordas orquestrais, mas não há nenhum produto dessas categorias; produtos "em breve" (sem regra no manual) são informados como ainda indisponíveis.
 
-### Inconsistências encontradas e como foram tratadas
-
-| Inconsistência | Decisão |
-|---|---|
-| Manual com dois WhatsApps: (67) 3341-4444 e (67) 3321-4500 | Usar (67) 3341-4444, que aparece nos dados oficiais da empresa |
-| E-mail com acento na tabela do manual (`empóriodamusica`) | Usar `contato@emporiodamusica.com.br` |
-| Parcela mínima: R$ 100 na tabela, mas faixas diferentes na seção 3.1 | Valem as faixas da seção 3.1; a frase ambígua de até 3x foi lida como parcela mínima de R$ 50 |
-| Direito de arrependimento vale só para compras online, mas os pedidos não indicam o canal | Pedidos do sistema tratados como compras online |
-| Manual cita sopros e cordas orquestrais, mas o catálogo não tem nenhum | O agente informa que no momento não há esses instrumentos |
-| Manual fala em "mais de 300 instrumentos"; o catálogo tem 65 | O agente não cita quantidade de itens do catálogo |
-| Status `coming_soon` sem regra no manual | Informar que ainda não está disponível e sugerir alternativas |
-| Manual sugere indicar lojas parceiras, mas não cita nenhuma | Não indicar lojas |
-| Sem data real de recebimento dos pedidos | A previsão de entrega é usada como aproximação do recebimento |
-| Os pedidos vão até março de 2026 e o agente usa a data de hoje | Todos os prazos de devolução e troca aparecem como vencidos; pedidos "enviados" com previsão vencida são sinalizados como atrasados |
-| Produtos 135 a 144: nome, descrição e specs não batem (ex.: "Korg" descrito como Roland de 88 teclas, specs com 61) | Não corrigido; registrado como problema dos dados de origem |
-| Totais dos pedidos 3 e 20 diferentes da soma dos itens; desconto do PIX não refletido nos totais; parcelamentos abaixo da parcela mínima (pedidos 7, 9 e 16) | Não usados pelo agente; registrados como problemas dos dados |
-| Pedido 3 entregue com produto `coming_soon` | Registrado como problema dos dados |
-| Clientes 11 e 43 com o mesmo e-mail | Sem impacto na verificação, que compara o e-mail com o cliente do próprio pedido |
+A lista completa de inconsistências, decisões e problemas dos dados que não foram corrigidos está em [`docs/decisoes-e-suposicoes.md`](docs/decisoes-e-suposicoes.md).
 
 ## Testes
 
-Mapeei 30 cenários de teste ([`testes/Cenário de Teste - Agente IA Conversa.csv`](testes/Cenário%20de%20Teste%20-%20Agente%20IA%20Conversa.csv)), cada um com a pergunta, a ferramenta esperada, o que precisa aparecer na resposta e o que não pode acontecer. **29 foram validados manualmente no chat** e 1 ficou parcial (ver abaixo), cobrindo catálogo, histórico, promoções ativas e encerradas, produtos esgotados, descontinuados e em breve, políticas, pedidos, escopo e segurança. Vários passaram só depois de ajustes na ferramenta ou no prompt; a coluna "Observação" registra o antes e o depois.
+Mapeei **30 cenários de teste**, cada um com a pergunta, a ferramenta esperada, o que precisa aparecer na resposta e o que não pode acontecer. **29 foram validados manualmente no chat e 1 ficou parcial.** Vários passaram só depois de ajustes na ferramenta ou no prompt.
 
-Alguns ciclos de teste e correção que moldaram o projeto:
+| Categoria | Cenários | Resultado |
+|---|---|---|
+| Catálogo (preço, filtros, promoções, esgotado, descontinuado, em breve, inexistente, PIX) | 12 | 11 ✅, 1 ⚠️ |
+| Políticas (endereço, horário, pagamento, frete, contato, defeito) | 8 | 8 ✅ |
+| Pedidos (status, devolução, cancelado) | 3 | 3 ✅ |
+| Escopo (acessórios, perguntas sem relação com a loja) | 3 | 3 ✅ |
+| Segurança (dados de outros clientes, manipulação) | 2 | 2 ✅ |
+| Conversa (saudação, continuação pelo histórico) | 2 | 2 ✅ |
+
+A planilha completa, com o histórico de cada teste (antes e depois das correções), está em [`testes/Cenário de Teste - Agente IA Conversa - Cenários.csv`](testes/Cen%C3%A1rio%20de%20Teste%20-%20Agente%20IA%20Conversa%20-%20Cen%C3%A1rios.csv).
+
+Três ciclos de teste e correção que moldaram o projeto:
 - **O agente inventava características** (chamou um violão sem captação de eletroacústico e inventou "cutaway"). Correção: filtros estruturados por tipo de corda e captação na ferramenta e uma regra para descrever só o que vem nos dados.
-- **Promoção encerrada tratada como inexistente** ("sem desconto de Páscoa cadastrado"). Causa: a ferramenta só devolvia promoções ativas. Correção: incluir as promoções encerradas no retorno, para o agente avisar que a promoção acabou.
-- **Uma ferramenta quebrada parecia problema do modelo:** o agente chamava a busca 5 vezes seguidas sem sucesso. O erro (um parâmetro faltando na assinatura da função) estava escondido pelo tratamento de exceções. Correção: erros de ferramenta passaram a aparecer no log, e cada ferramenta é testada isolada (`python -m src.tools`) antes de ir para o chat.
-- **Preço no PIX:** com o modelo calculando os 5%, ele errou o valor. Com o valor pronto na ferramenta, mas num campo que podia ser um preço ou vazio (produto em promoção), ele acertou o valor e se confundiu na explicação. A correção foi a ferramenta devolver a frase pronta. Ainda assim, o modelo reserva (`flash-lite`) arredondou um preço promocional ao escrever (R$ 439,00 em vez de R$ 439,20), e por isso esse cenário ficou como parcial.
-- **Resposta que prometia antes de verificar** ("Com certeza!" para uma devolução fora do prazo). Correção: regra para explicar a política e só concluir depois de consultar o pedido.
+- **Uma ferramenta quebrada parecia problema do modelo:** o agente chamava a busca 5 vezes seguidas sem sucesso, porque o erro (um parâmetro faltando na função) ficava escondido. Correção: erros de ferramenta passaram a aparecer no log, e cada ferramenta é testada isolada (`python -m src.tools`) antes de ir para o chat.
+- **Preço no PIX:** calculando sozinho, o modelo errou o valor; com o valor pronto, mas num campo que podia ser um preço ou vazio, ele se confundiu na explicação. A correção foi a ferramenta devolver a frase pronta. O cenário ficou parcial porque o modelo reserva (`flash-lite`) ainda arredondou um preço ao escrever.
 
 ## Limitações conhecidas e próximos passos
 
@@ -278,12 +254,13 @@ Alguns ciclos de teste e correção que moldaram o projeto:
 - Expor o agente por uma API e integrar com um canal real, como o WhatsApp.
 
 ## Uso de assistentes de IA
- 
+
 Utilizei o Claude (Anthropic) como ferramenta de apoio durante o desenvolvimento do projeto, desde a análise dos dados e definição da arquitetura até a implementação, os testes e a documentação.
- 
+
 O uso foi dividido em três etapas principais:
- 
+
 - **Análise e arquitetura:** discussão das abordagens possíveis (RAG, function calling, ReAct e text-to-SQL), análise dos dados fornecidos e avaliação das decisões técnicas. As decisões finais foram tomadas considerando os requisitos do desafio.
 - **Desenvolvimento:** implementação dos componentes com apoio de explicações e sugestões de código. Cada etapa foi executada e testada localmente, com análise dos erros e ajustes necessários.
 - **Validação:** elaboração dos cenários de teste, análise das respostas do agente e correção de falhas identificadas no comportamento, nas ferramentas e nos prompts.
+
 O README e a documentação também foram elaborados com apoio do Claude, a partir das anotações e dos resultados dos testes, e revisados por mim.
