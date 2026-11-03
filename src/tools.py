@@ -84,10 +84,11 @@ def buscar_produtos(
         df = df[df["preco_final"] >= preco_min]
     if preco_max is not None:
         df = df[df["preco_final"] <= preco_max]
-
+        
     total = len(df)
     df = df.sort_values("preco_final").head(LIMITE_RESULTADOS)
     encerradas = _promocoes_encerradas()
+
 
     produtos = [
         {
@@ -97,6 +98,11 @@ def buscar_produtos(
             "desconto_percent": int(linha["discount_percent"]),
             "promocao": linha["promocao"] if pd.notna(linha["promocao"]) else None,
             "preco_final": _formatar_reais(linha["preco_final"]),
+            "pix": (
+                f"{_formatar_reais(linha['preco_final'] * 0.95)} com 5% de desconto no PIX"
+                if linha["discount_percent"] == 0
+                else "Desconto do PIX não se aplica: o produto já está em promoção"
+            ),
             "promocoes_encerradas": encerradas.get(linha["product_id"], []),
             "estoque": int(linha["stock_quantity"]),
             "status": linha["status"],
@@ -192,3 +198,7 @@ if __name__ == "__main__":
     print(consultar_pedido(5, "Rafael Pereira", "outro@email.com"))            # e-mail errado
     print(consultar_pedido(19, "pedro henrique oliveira", "PEDRO.OLIVEIRA@jmail.com"))  # maiúsculas
     print(consultar_pedido(8, "Ana Carolina Ferreira", "anacarol.ferreira@coldmail.com"))  # enviado e atrasado
+
+    print("\n--- PIX ---")
+    print(buscar_produtos(termo="takamine gd20")["produtos"][0]["pix"])  # R$ 2.089,05
+    print(buscar_produtos(termo="ohana ck-20")["produtos"][0]["pix"])    # None (em promoção)
