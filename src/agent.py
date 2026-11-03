@@ -7,6 +7,7 @@ from src.prompts import montar_prompt
 from src.tools import buscar_produtos
 import time
 from src.spinner import Spinner
+from src.tools import buscar_produtos, consultar_pedido
 
 # Máximo de idas e vindas com ferramentas por mensagem (evita loop infinito)
 MAX_PASSOS = 5
@@ -16,6 +17,8 @@ TENTATIVAS = 3
 # Liga o NOME que o Gemini usa à FUNÇÃO Python que será executada
 FUNCOES = {
     "buscar_produtos": buscar_produtos,
+    "buscar_produtos": buscar_produtos,
+    "consultar_pedido": consultar_pedido,
 }
 
 
@@ -70,6 +73,25 @@ def _declaracao_buscar_produtos() -> types.FunctionDeclaration:
         ),
     )
 
+def _declaracao_consultar_pedido() -> types.FunctionDeclaration:
+    return types.FunctionDeclaration(
+        name="consultar_pedido",
+        description=(
+            "Consulta status, rastreio, datas, valor, forma de pagamento e itens de um pedido. "
+            "Use quando o cliente perguntar sobre um pedido específico (status, entrega, troca, devolução). "
+            "Só chame quando tiver os TRÊS dados informados pelo cliente: número do pedido, nome e e-mail do cadastro."
+        ),
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "numero_pedido": types.Schema(type=types.Type.INTEGER, description="Número do pedido."),
+                "nome": types.Schema(type=types.Type.STRING, description="Nome do cliente, como informado por ele."),
+                "email": types.Schema(type=types.Type.STRING, description="E-mail do cadastro, como informado pelo cliente."),
+            },
+            required=["numero_pedido", "nome", "email"],
+        ),
+    )
+
 
 def _executar_ferramenta(chamada: types.FunctionCall) -> dict:
     """Executa a função pedida pelo Gemini e devolve o resultado (ou o erro)."""
@@ -82,6 +104,16 @@ def _executar_ferramenta(chamada: types.FunctionCall) -> dict:
         print(f"  [erro na ferramenta] {type(erro).__name__}: {erro}")
         return {"erro": str(erro)}
 
+def _args_para_log(args: dict) -> dict:
+    """Esconde dados pessoais antes de imprimir no terminal."""
+    seguro = dict(args)
+    if "email" in seguro:
+        usuario, _, dominio = str(seguro["email"]).partition("@")
+        seguro["email"] = f"{usuario[:2]}***@{dominio}"
+    if "nome" in seguro:
+        seguro["nome"] = str(seguro["nome"]).split()[0] + " ***"
+    return seguro
+
 
 class Agente:
     def __init__(self):
@@ -89,7 +121,7 @@ class Agente:
         self.historico: list[types.Content] = []
         self.config = types.GenerateContentConfig(
             system_instruction=montar_prompt(),
-            tools=[types.Tool(function_declarations=[_declaracao_buscar_produtos()])],
+            tools=[types.Tool(function_declarations=[_declaracao_buscar_produtos(), _declaracao_consultar_pedido()])],
         )
     def _gerar(self):
         """Tenta cada modelo da lista. Servidor ocupado (5xx): tenta de novo. Cota esgotada (429): pula de modelo."""
@@ -134,7 +166,7 @@ class Agente:
 
                 partes = []
                 for chamada in resposta.function_calls:
-                    print(f"  [ferramenta] {chamada.name}({dict(chamada.args or {})})")
+                    print(f"  [ferramenta] {chamada.name}({_args_para_log(dict(chamada.args or {}))})")
                     resultado = _executar_ferramenta(chamada)
                     partes.append(types.Part.from_function_response(name=chamada.name, response=resultado))
                 self.historico.append(types.Content(role="user", parts=partes))
