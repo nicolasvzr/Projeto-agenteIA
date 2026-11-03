@@ -1,9 +1,14 @@
 from src.agent import Agente
 
+SAUDACAO = """Atendente: Oi! Aqui é o assistente virtual da Empório da Música 🎸 Sua música começa aqui!
+
+Como posso te ajudar?
+"""
 
 def main():
     agente = Agente()
     print("🎸 Empório da Música — atendimento virtual (digite 'sair' para encerrar)\n")
+    print(SAUDACAO)
 
     while True:
         mensagem = input("Você: ").strip()
@@ -18,4 +23,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nAté mais! 🎶")
